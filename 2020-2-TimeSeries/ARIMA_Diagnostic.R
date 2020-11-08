@@ -28,24 +28,25 @@ pacf(d.log.y)
 
 # ARIMA fitting with BIC 
 bic=c(); 
-for(p in 1:10){ar.fit2 = Arima(d.log.y, order = c(p-1,1,0))
+for(p in 1:10){ar.fit2 = Arima(log.y, order = c(p-1,1,0))
 bic[p] = ar.fit2$bic};  which.min(bic)
 
-arima210.fit = Arima(d.log.y, order=c(2,1,0)) ; arima210.fit
+
+arima310.fit = Arima(log.y, order=c(3,1,0)) ; arima310.fit
 
 # Portmanteau 
 L = c() ; Q = c() ; p = c() 
 for (i in 1:4) { L[i] = 3*i ; 
-Q[i] = Box.test(arima210.fit$residuals, lag=L[i] , type="Ljung-Box")$statistic 
+Q[i] = Box.test(arima310.fit$residuals, lag=L[i] , type="Ljung-Box")$statistic 
 df = L[i]-3 
 p[i] = 1-pchisq(Q[i], df) }
 Portmanteau = cbind(L, Q, p) ; Portmanteau
 
 # residual's ACF, PACF 
-acf(arima210.fit$residuals)
-pacf(arima210.fit$residuals)
+acf(arima310.fit$residuals)
+pacf(arima310.fit$residuals)
 
 
 # Forecasts 
-arima210.hat = forecast(arima210.fit, h=10) ; arima210.hat
-plot(arima210.hat)
+arima310.fit.hat = forecast(arima310.fit, h=10) ; arima310.fit.hat
+plot(arima310.fit.hat)
