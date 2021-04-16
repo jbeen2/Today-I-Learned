@@ -1,0 +1,234 @@
+---
+title: "HW1"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Chapter 1 
+
+## 1.6.1 
+
+### (a) B-splines 
+```{r}
+library(fda)
+library(ggplot2)
+library(plot3D)
+```
+
+```{r}
+my_basis <- create.bspline.basis(c(0, 0.3), nbasis=15, norder=4)
+pinch.F <- Data2fd(pinchtime, pinch,my_basis)
+plot(pinch.F)
+```
+
+### (b) mean & SD 
+```{r}
+mu.F <- mean.fd(pinch.F) # mean 
+sd.F <- sd.fd(pinch.F)   # sd 
+```
+```{r}
+par(mfrow=c(1,2))
+plot(pinch.F, col='gray') ; par(new=TRUE) ; plot(mu.F)
+plot(pinch.F, col='gray') ; par(new=TRUE) ; plot(sd.F)
+```
+
+### (c) covariate function c(t,s) graph 
+```{r}
+pinch_var <- var.fd(pinch.F)
+pts <- seq(from=0, to=0.3, length=50)  # timepoint 
+pinch_mat <- eval.bifd(pts, pts, pinch_var)
+persp3D(pts, pts, pinch_mat, axes=FALSE, colkey=FALSE, bty="g", shade=.4)
+# cov(s,t) high point = Xn(t), Xn(s) 가 동시에 평균에서 많이 벗어났다 
+```
+
+### (d) Functional Principal Components Analysis (FPCA)
+```{r}
+pinch_pca <- pca.fd(pinch.F, nharm=4)  # 4 EFPC 
+plot(pinch_pca$harmonics) # harmonics : principal components
+pinch_pca$varprop # varprop : explained variances for each pc
+```
+```{r}
+# 90% of variance 
+sum(pinch_pca$varprop[1:2])
+```
+
+
+## 1.6.2 
+
+### (a) compare interest rates plots (Jan1982 vs Jun2009)
+```{r}
+library(fds) ; library(fda)
+yield = FedYieldcurve ; terms = yield$x  # (3,6,12,60,84,120)
+plot(terms, yield$y[,1], pch=15, ylab="Yield", ylim=c(0,17))
+points(terms, yield$y[,330], pch=16, col=2)
+```
+
+### (b) Average behavior of Interest Rates 
+```{r}
+my_basis <- create.bspline.basis(c(3,120), nbasis=4)
+yield.F <- Data2fd(terms, yield$y, my_basis)
+mu.F <- mean.fd(yield.F)
+
+# monotonic increasing trends
+plot(yield.F,col="grey") ; par(new=TRUE) ; plot(mu.F,lwd=4,add=TRUE) 
+```
+
+### (c) Principal Component of the Interest Rate Curves 
+```{r}
+yield_pca <- pca.fd(yield.F, nharm=4)
+plot(yield_pca$harmonics)
+yield_pca$varprop  # First Component explain most of variance (99%)
+```
+# Chapter 2 
+
+## 2.5.2
+
+### (a) Smooth the Interest Rates (in Jan 1982)
+```{r}
+yield.1982J <- yield$y[,1] ; terms = yield$x
+my_basis <- create.bspline.basis(c(3,120), nbasis=4)
+yield.1982J.S <- smooth.basis(terms, yield.1982J, my_basis)
+plot(terms, yield.1982J, pch=15, ylab="Yield")  # 1982 January
+plot(yield.1982J.S, lwd=4, add=TRUE, col=4)     # Smooth the Interest Rates 
+```
+
+
+### (b) Penalized Smoothing 
+
+
+```{r}
+my_basis <- create.bspline.basis(c(3,120),nbasis=6)
+my_par <- fdPar(my_basis, Lfdobj=2, lambda=1)  
+yield.1982J.S.P <- smooth.basis(terms,yield.1982J,my_par)
+
+plot(terms, yield.1982J,pch=15, ylab="Yield",ylim=c(14,15))  # 1982 January
+plot(yield.1982J.S,lwd=4,add=TRUE,col=4)
+plot(yield.1982J.S.P,lwd=4,add=TRUE,col=2)
+```
+
+### (c) Smoothing with different lambda values 
+```{r}
+my_par1 <- fdPar(my_basis,Lfdobj=2,lambda=1)
+yield.1982J.S.P1 <- smooth.basis(terms,yield.1982J,my_par1)
+my_par2 <- fdPar(my_basis,Lfdobj=2,lambda=10)
+yield.1982J.S.P2 <- smooth.basis(terms,yield.1982J,my_par2)
+my_par3 <- fdPar(my_basis,Lfdobj=2,lambda=100)
+yield.1982J.S.P3 <- smooth.basis(terms,yield.1982J,my_par3)
+my_par4 <- fdPar(my_basis,Lfdobj=2,lambda=1000)
+yield.1982J.S.P4 <- smooth.basis(terms,yield.1982J,my_par4)
+
+plot(terms, yield.1982J,pch=15, ylab="Yield",ylim=c(14,15)) 
+
+par(mfrow=c(2,2))
+plot(yield.1982J.S.P1,lwd=4,add=TRUE,col=2)
+plot(yield.1982J.S.P2,lwd=4,add=TRUE,col=3)
+plot(yield.1982J.S.P3,lwd=4,add=TRUE,col=4)
+plot(yield.1982J.S.P4,lwd=4,add=TRUE,col=5)
+legend("topright",c("lambda=1","lambda=10","lambda=100","lambda=1000"),col=2:5,lwd=rep(4,4))
+```
+
+```{r}
+# lambda 100 gives the most informative smooth curve 
+yield.1982J.S.P1$gcv
+yield.1982J.S.P2$gcv
+yield.1982J.S.P3$gcv
+yield.1982J.S.P4$gcv
+```
+
+## 2.5.5 
+
+### (a) Matern Process 
+```{r}
+library(RandomFields)
+library(expm)
+library(fields)
+```
+
+
+```{r}
+# 2 bump functions 
+f1 <- function(x){
+      c = 3/8; r = 1/4; a = 5
+      result = rep(0,length(x))
+      ind = which( abs(x - c) < r )
+      result[ind] = a*exp(   ( 1-((x[ind]-c)/r)^2 )^(-1)   )
+      return(result)
+}
+
+f2 <- function(x){
+      c = 5/8; r = 1/4; a = 5
+      result = rep(0,length(x))
+      ind = which( abs(x - c) < r )
+      result[ind] = a*exp(   ( 1-((x[ind]-c)/r)^2 )^(-1)   )
+      return(result)
+}
+
+m <- 20; times <- seq(0,1,length = m)
+```
+
+```{r}
+# Matern Simulation 
+Simul_matern <- function(ind){
+                # matern process parameter
+                range <- 1; nu <- 1; sig2 <- 1
+
+                d_mat <- abs(outer(times,times,"-"))
+                C <- apply(d_mat,c(1,2),FUN=Matern,range=range,nu=nu)
+                C <- C*sig2; C_sq <- sqrtm(C); Z <- rnorm(m)
+                
+                if( ind == 1 ){ X <- C_sq%*%Z + f1(times) }else{ X <- C_sq%*%Z + f2(times) }
+                return(X)
+}
+
+N <- 50
+Data <- matrix(0,20,N) # observed for 20 time points and N functional samples
+for(i in 1:25){ Data[,i] <- Simul_matern(1) }
+for(i in 26:50 ){ Data[,i] <- Simul_matern(2) }
+```
+
+```{r}
+my_basis <- create.bspline.basis(c(0,1),nbasis=6)
+Data.F <- Data2fd(times,Data,my_basis)
+mu.F <- mean.fd(Data.F)
+plot(Data.F,col="grey")
+plot(mu.F,lwd=4,add=TRUE)
+```
+
+### (b) Align the Curves 
+```{r}
+reg <- try(register.fd(Data.F),silent=TRUE)
+mu.reg <- mean(reg$regfd)
+par(mfrow=c(1,2))
+plot(Data.F,col="grey",main="unaligned")
+plot(mu.F,lwd=4,add=TRUE)
+plot(reg$regfd,col="grey",main="aligned")
+```
+
+### (c) FPCA 
+```{r}
+Data.F_pc <- pca.fd(Data.F,nharm=1)
+reg_pc <- pca.fd(reg$regfd,nharm=1)
+```
+
+```{r}
+# fit onto a dummy variable 
+dummy <- c(rep(0,25),rep(1,25))
+res1 <- lm(Data.F_pc$scores ~ dummy)
+res2 <- lm(reg_pc$scores ~ dummy)
+```
+
+```{r}
+# Check p-value 
+summary(res1)
+summary(res2)
+```
+
+### (d) Results 
+```{r}
+# Alignment 를 시행하면, curve 의 detail 한 정보를 잃을 수 있다. 
+# Regression 을 통해 알 수 있듯이, PCA를 통해 이를 보완할 수 있다. 
+```
+
