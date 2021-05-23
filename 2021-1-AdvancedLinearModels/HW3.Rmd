@@ -1,0 +1,466 @@
+---
+title: "HW3"
+output: html_document
+---
+
+# #1. Doubly Robust Estimator Simulation 
+
+```{r}
+library(readr)
+library(dplyr)
+library(tableone)
+library(geepack)
+```
+
+
+```{r}
+nhefs <- read_csv("nhefs.csv")
+
+# 82년도에 관측치가 없어 절단된 데이터 : censoring 
+table(nhefs$qsmk, is.na(nhefs["wt82"]))
+nhefs$cens <- ifelse(is.na(nhefs["wt82"]), 1, 0)
+```
+
+## 1. Doubly Robust Estimator 
+
+### (1) Treatment TRUE / Outcome TRUE 
+
+```{r}
+## STEP1. IPW for treatment A 
+# Estimation of P(A=1|L) (=IP weights) : via logistic regression 
+
+# A : qsmk (treatment)
+fit <- glm(qsmk ~ sex + race + age + I(age^2) +
+           as.factor(education) + smokeintensity +
+           I(smokeintensity^2) + smokeyrs + I(smokeyrs^2) +
+           as.factor(exercise) + as.factor(active) + wt71 + I(wt71^2),
+           family = binomial(), data = nhefs)
+# fit  # coef 
+```
+
+```{r}
+## STEP2. Fit Outcome Regression E[Y|A=a, L=l, R]
+# qsmk = 0 이면 1-p / qsmk=1 이면 p 
+p.qsmk.obs <- ifelse(nhefs$qsmk == 0, 1-predict(fit, type = "response"),
+                     predict(fit, type = "response"))
+
+nhefs$w <- 1/p.qsmk.obs  # 1629 개의 weight : 1/{P(Ai=1|Li)}, 1/{P(Ai=0|Li)}
+summary(nhefs$w)  # 1.06 ~ 16.01 
+```
+
+```{r}
+# R = W^A if A = 1 ; R = -W^A if A = 0 
+nhefs$r <- ifelse(nhefs$qsmk == 1, 1/p.qsmk.obs, -(1/p.qsmk.obs)) 
+summary(nhefs$r)  # -2.92 ~ 16.01
+```
+
+```{r}
+# GEE, Y ~ A+R, weight <- IPW weight 
+msm.w <- geeglm(wt82_71 ~ qsmk + r, data=nhefs, id=seqn, weights = w,  
+                corstr="independence")
+summary(msm.w)
+```
+
+```{r}
+## STEP3. Use the predicted values from the outcome model to obtain Standardized mean and outcomes 
+nhefs$predicted.meanY <- predict(msm.w, nhefs)  # y hat 
+summary(nhefs$predicted.meanY[nhefs$cens==0]) # Min 1.07, Max 10.35 / Mean 2.58
+```
+
+```{r}
+# create a dataset with 3 copies of each subject
+nhefs$interv <- -1     # 1st copy: equal to original one
+
+interv0 <- nhefs       # 2nd copy: treatment set to 0, outcome to missing
+interv0$interv <- 0    # treatment A = 0 으로 고정 
+interv0$qsmk <- 0
+interv0$predicted.meanY <- NA
+
+interv1 <- nhefs       # 3rd copy: treatment set to 1, outcome to missing
+interv1$interv <- 1    # treatment A = 1 으로 고정 
+interv1$qsmk <- 1
+interv1$predicted.meanY <- NA
+
+onesample <- rbind(nhefs, interv0, interv1)  # combining datasets : 1629*3 = 4887 
+```
+
+```{r}
+std <- glm(predicted.meanY ~ qsmk + sex + race + age + I(age*age)
+           + as.factor(education) + smokeintensity
+           + I(smokeintensity*smokeintensity) + smokeyrs
+           + I(smokeyrs*smokeyrs) + as.factor(exercise)
+           + as.factor(active) + wt71 + I(wt71*wt71) + I(qsmk*smokeintensity),
+           data=onesample) # 3개의 dataset 으로 modeling 
+summary(std) # coef 
+```
+
+```{r}
+onesample$predicted_meanY <- predict(std, onesample)
+mean(onesample[which(onesample$interv==-1),]$predicted_meanY) 
+```
+
+```{r}
+EY.a0.c0<-mean(onesample[which(onesample$interv==0),]$predicted_meanY)
+EY.a1.c0<-mean(onesample[which(onesample$interv==1),]$predicted_meanY)
+EY.a1.c0 - EY.a0.c0
+```
+
+
+### (2) Treatment FALSE / Outcome TRUE 
+
+```{r}
+nhefs <- read_csv("nhefs.csv")
+
+# 82년도에 관측치가 없어 절단된 데이터 : censoring 
+nhefs$cens <- ifelse(is.na(nhefs["wt82"]), 1, 0)
+```
+
+```{r}
+## STEP1. IPW for treatment A 
+# Estimation of P(A=1|L) (=IP weights) : via logistic regression 
+
+# A : qsmk (treatment)
+fit <- glm(qsmk ~ sex + race + age + I(age^2) +
+           as.factor(education) + smokeintensity +
+           I(smokeintensity^2) + smokeyrs + I(smokeyrs^2), 
+           family = binomial(), data = nhefs)
+
+## STEP2. Fit Outcome Regression E[Y|A=a, L=l, R]
+p.qsmk.obs <- ifelse(nhefs$qsmk == 0, 1-predict(fit, type = "response"),
+                     predict(fit, type = "response"))
+
+nhefs$w <- 1/p.qsmk.obs
+summary(nhefs$w)  # Min 1.06, Max 17.52 / Mean 2.00 
+```
+
+```{r}
+# R = W^A if A = 1 ; R = -W^A if A = 0 
+nhefs$r <- ifelse(nhefs$qsmk == 1, 1/p.qsmk.obs, -(1/p.qsmk.obs)) 
+summary(nhefs$r)  # -2.94 ~ 17.52
+```
+
+```{r}
+# GEE, Y ~ A+R, weight <- IPW weight 
+msm.w <- geeglm(wt82_71 ~ qsmk + r, data=nhefs, id=seqn, weights = w,  
+                corstr="independence")
+summary(msm.w)
+```
+
+```{r}
+## STEP3. Use the predicted values from the outcome model to obtain Standardized mean and outcomes 
+nhefs$predicted.meanY <- predict(msm.w, nhefs)  # y hat 
+summary(nhefs$predicted.meanY[nhefs$cens==0])
+```
+
+```{r}
+# create a dataset with 3 copies of each subject
+nhefs$interv <- -1     # 1st copy: equal to original one
+
+interv0 <- nhefs       # 2nd copy: treatment set to 0, outcome to missing
+interv0$interv <- 0    # treatment A = 0 으로 고정 
+interv0$qsmk <- 0
+interv0$predicted.meanY <- NA
+
+interv1 <- nhefs       # 3rd copy: treatment set to 1, outcome to missing
+interv1$interv <- 1    # treatment A = 1 으로 고정 
+interv1$qsmk <- 1
+interv1$predicted.meanY <- NA
+
+onesample <- rbind(nhefs, interv0, interv1)  # combining datasets : 1629*3 = 4887 
+```
+
+```{r}
+std <- glm(predicted.meanY ~ qsmk + sex + race + age + I(age*age)
+           + as.factor(education) + smokeintensity
+           + I(smokeintensity*smokeintensity) + smokeyrs
+           + I(smokeyrs*smokeyrs) + as.factor(exercise)
+           + as.factor(active) + wt71 + I(wt71*wt71) + I(qsmk*smokeintensity),
+           data=onesample) # 3개의 dataset 으로 modeling 
+
+onesample$predicted_meanY <- predict(std, onesample)
+mean(onesample[which(onesample$interv==-1),]$predicted_meanY) 
+
+EY.a0.c0<-mean(onesample[which(onesample$interv==0),]$predicted_meanY)
+EY.a1.c0<-mean(onesample[which(onesample$interv==1),]$predicted_meanY)
+EY.a1.c0 - EY.a0.c0
+```
+
+
+
+### (3) Treatment TRUE / Outcome FALSE 
+
+```{r}
+nhefs <- read_csv("nhefs.csv")
+
+# 82년도에 관측치가 없어 절단된 데이터 : censoring 
+nhefs$cens <- ifelse(is.na(nhefs["wt82"]), 1, 0)
+```
+
+```{r}
+## STEP1. IPW for treatment A 
+# Estimation of P(A=1|L) (=IP weights) : via logistic regression 
+
+# A : qsmk (treatment)
+fit <- glm(qsmk ~ sex + race + age + I(age^2) +
+           as.factor(education) + smokeintensity +
+           I(smokeintensity^2) + smokeyrs + I(smokeyrs^2) +
+           as.factor(exercise) + as.factor(active) + wt71 + I(wt71^2),
+           family = binomial(), data = nhefs)
+
+## STEP2. Fit Outcome Regression E[Y|A=a, L=l, R]
+p.qsmk.obs <- ifelse(nhefs$qsmk == 0, 1-predict(fit, type = "response"),
+                     predict(fit, type = "response"))
+
+nhefs$w <- 1/p.qsmk.obs
+summary(nhefs$w)  # Min 1.06, Max 16.01 / Mean 2.00 
+```
+
+```{r}
+# R = W^A if A = 1 ; R = -W^A if A = 0 
+nhefs$r <- ifelse(nhefs$qsmk == 1, 1/p.qsmk.obs, -(1/p.qsmk.obs)) 
+summary(nhefs$r)  # -2.92 ~ 16.01
+```
+
+```{r}
+# GEE, Y ~ A+R, weight <- IPW weight 
+msm.w <- geeglm(wt82_71 ~ qsmk + r, data=nhefs, id=seqn, weights = w,  
+                corstr="independence")
+summary(msm.w)
+```
+
+```{r}
+## STEP3. Use the predicted values from the outcome model to obtain Standardized mean and outcomes 
+nhefs$predicted.meanY <- predict(msm.w, nhefs)  # y hat 
+summary(nhefs$predicted.meanY[nhefs$cens==0])
+```
+
+```{r}
+# create a dataset with 3 copies of each subject
+nhefs$interv <- -1     # 1st copy: equal to original one
+
+interv0 <- nhefs       # 2nd copy: treatment set to 0, outcome to missing
+interv0$interv <- 0    # treatment A = 0 으로 고정 
+interv0$qsmk <- 0
+interv0$predicted.meanY <- NA
+
+interv1 <- nhefs       # 3rd copy: treatment set to 1, outcome to missing
+interv1$interv <- 1    # treatment A = 1 으로 고정 
+interv1$qsmk <- 1
+interv1$predicted.meanY <- NA
+
+onesample <- rbind(nhefs, interv0, interv1)  # combining datasets : 1629*3 = 4887 
+```
+
+```{r}
+std <- glm(predicted.meanY ~ qsmk + sex + race ,
+           data=onesample) # 3개의 dataset 으로 modeling 
+
+onesample$predicted_meanY <- predict(std, onesample)
+mean(onesample[which(onesample$interv==-1),]$predicted_meanY) 
+
+EY.a0.c0<-mean(onesample[which(onesample$interv==0),]$predicted_meanY)
+EY.a1.c0<-mean(onesample[which(onesample$interv==1),]$predicted_meanY)
+EY.a1.c0 - EY.a0.c0
+```
+
+
+### (4) Treatment FALSE / Outcome FALSE 
+
+
+```{r}
+nhefs <- read_csv("nhefs.csv")
+
+# 82년도에 관측치가 없어 절단된 데이터 : censoring 
+nhefs$cens <- ifelse(is.na(nhefs["wt82"]), 1, 0)
+```
+
+```{r}
+## STEP1. IPW for treatment A 
+# Estimation of P(A=1|L) (=IP weights) : via logistic regression 
+
+# A : qsmk (treatment)
+fit <- glm(qsmk ~ sex + race + age + I(age^2) +
+           as.factor(education) + smokeintensity +
+           I(smokeintensity^2) + smokeyrs + I(smokeyrs^2), 
+           family = binomial(), data = nhefs)
+
+## STEP2. Fit Outcome Regression E[Y|A=a, L=l, R]
+p.qsmk.obs <- ifelse(nhefs$qsmk == 0, 1-predict(fit, type = "response"),
+                     predict(fit, type = "response"))
+
+nhefs$w <- 1/p.qsmk.obs
+summary(nhefs$w)  # Min 1.06, Max 17.52 / Mean 2.00 
+```
+
+```{r}
+# R = W^A if A = 1 ; R = -W^A if A = 0 
+nhefs$r <- ifelse(nhefs$qsmk == 1, 1/p.qsmk.obs, -(1/p.qsmk.obs)) 
+summary(nhefs$r)  # -2.94 ~ 17.52
+```
+
+```{r}
+# GEE, Y ~ A+R, weight <- IPW weight 
+msm.w <- geeglm(wt82_71 ~ qsmk + r, data=nhefs, id=seqn, weights = w,  
+                corstr="independence")
+summary(msm.w)
+```
+
+```{r}
+## STEP3. Use the predicted values from the outcome model to obtain Standardized mean and outcomes 
+nhefs$predicted.meanY <- predict(msm.w, nhefs)  # y hat 
+summary(nhefs$predicted.meanY[nhefs$cens==0])
+```
+
+```{r}
+# create a dataset with 3 copies of each subject
+nhefs$interv <- -1     # 1st copy: equal to original one
+
+interv0 <- nhefs       # 2nd copy: treatment set to 0, outcome to missing
+interv0$interv <- 0    # treatment A = 0 으로 고정 
+interv0$qsmk <- 0
+interv0$predicted.meanY <- NA
+
+interv1 <- nhefs       # 3rd copy: treatment set to 1, outcome to missing
+interv1$interv <- 1    # treatment A = 1 으로 고정 
+interv1$qsmk <- 1
+interv1$predicted.meanY <- NA
+
+onesample <- rbind(nhefs, interv0, interv1)  # combining datasets : 1629*3 = 4887 
+```
+
+```{r}
+std <- glm(predicted.meanY ~ qsmk + sex + race ,
+           data=onesample) # 3개의 dataset 으로 modeling 
+
+onesample$predicted_meanY <- predict(std, onesample)
+mean(onesample[which(onesample$interv==-1),]$predicted_meanY) 
+
+EY.a0.c0<-mean(onesample[which(onesample$interv==0),]$predicted_meanY)
+EY.a1.c0<-mean(onesample[which(onesample$interv==1),]$predicted_meanY)
+EY.a1.c0 - EY.a0.c0
+```
+
+[ACE] Treatment, Outcome - TT 3.3 / FT 3.28 / TF 3.15 / FF 3.17  
+
+Treatment 혹은 Outcome 둘 중 하나만 맞은 경우에도 결과를 잘 나타내 주는 것을 확인할 수 있다. 
+
+
+
+## 2. IPW 
+
+```{r}
+nhefs <- read_csv("nhefs.csv")
+
+# 82년도에 관측치가 없어 절단된 데이터 : censoring 
+nhefs$cens <- ifelse(is.na(nhefs["wt82"]), 1, 0)
+```
+
+```{r}
+# IPW for treatment A 
+# Estimation of P(A=1|L) (=IP weights) : via logistic regression 
+
+# A : qsmk (treatment)
+fit <- glm(qsmk ~ sex + race + age + I(age^2) +
+             as.factor(education) + smokeintensity +
+             I(smokeintensity^2) + smokeyrs + I(smokeyrs^2) +
+             as.factor(exercise) + as.factor(active) + wt71 + I(wt71^2),
+             family = binomial(), data = nhefs)
+
+# qsmk = 0 이면 1-p(확률값) / qsmk=1 이면 p 
+p.qsmk.obs <- ifelse(nhefs$qsmk == 0, 1 - predict(fit, type = "response"),
+                     predict(fit, type = "response"))
+
+```
+
+```{r}
+# IPW 
+nhefs$w <- 1/p.qsmk.obs  # 1629 개의 weight : 1/{P(Ai=1|Li)}, 1/{P(Ai=0|Li)}
+summary(nhefs$w)  # 1.056 ~ 16 
+```
+
+16 값을 가진 사람은 다른 사람들보다 조금 특이하므로, 한 사람의 data 가 16 배로 부풀려져서 pseudo population 에 들어간다.  
+이를 통해 두 집단의 비율이 맞춰진다.
+
+```{r}
+# GEE (Generalized Estimating Equations) 
+
+# Y ~ A, weight <- IPW weight 
+msm.w <- geeglm(wt82_71 ~ qsmk, data=nhefs, weights=w, id=seqn,
+                corstr="independence")
+summary(msm.w) 
+```
+
+E(Y|A=0) = 1.75 / E(Y|A=1) = 1.75+3.52 : difference causal effect 의 estimator 값 
+
+```{r}
+beta <- coef(msm.w) ; SE <- coef(summary(msm.w))[,2]
+lcl <- beta-qnorm(0.975)*SE ; ucl <- beta+qnorm(0.975)*SE
+cbind(beta, lcl, ucl) 
+```
+
+나이대를 맞춰 보았더니, 3.5 년 정도로 격차가 더 벌어지게 된다.  
+
+## 3. Standardization 
+
+```{r}
+nhefs <- read_csv("nhefs.csv")
+
+# 82년도에 관측치가 없어 절단된 데이터 : censoring 
+table(nhefs$qsmk, is.na(nhefs["wt82"]))
+nhefs$cens <- ifelse(is.na(nhefs["wt82"]), 1, 0)
+```
+
+```{r}
+# \Sigma E(Y|L=l, A=a) * P(L=l)
+# data : NHEFS from uncensored individuals (C=0)
+
+fit <- glm(wt82_71 ~ qsmk + sex + race + age + I(age*age) + as.factor(education)
+           + smokeintensity + I(smokeintensity*smokeintensity) + smokeyrs
+           + I(smokeyrs*smokeyrs) + as.factor(exercise) + as.factor(active)
+           + wt71 + I(wt71*wt71) + qsmk*smokeintensity, data=nhefs)
+           
+# summary(fit)$coef  # coef 
+```
+
+```{r}
+nhefs$predicted.meanY <- predict(fit, nhefs)  # y hat 
+summary(nhefs$predicted.meanY[nhefs$cens==0]) # Min -10.88, Max 9.88 / Mean 2.64 
+```
+
+```{r}
+# create a dataset with 3 copies of each subject
+nhefs$interv <- -1 # 1st copy: equal to original one
+
+interv0 <- nhefs   # 2nd copy: treatment set to 0, outcome to missing
+interv0$interv <- 0    # treatment A = 0 으로 고정 
+interv0$qsmk <- 0
+interv0$wt82_71 <- NA
+
+interv1 <- nhefs   # 3rd copy: treatment set to 1, outcome to missing
+interv1$interv <- 1    # treatment A = 1 으로 고정 
+interv1$qsmk <- 1
+interv1$wt82_71 <- NA
+
+onesample <- rbind(nhefs, interv0, interv1) # combining datasets : 1629*3 = 4887 
+```
+
+```{r}
+std <- glm(wt82_71 ~ qsmk + sex + race + age + I(age*age)
+           + as.factor(education) + smokeintensity
+           + I(smokeintensity*smokeintensity) + smokeyrs
+           + I(smokeyrs*smokeyrs) + as.factor(exercise)
+           + as.factor(active) + wt71 + I(wt71*wt71) + I(qsmk*smokeintensity),
+           data=onesample) # 3개의 dataset 으로 modeling 
+# summary(std) # coef 
+
+onesample$predicted_meanY <- predict(std, onesample)
+```
+
+```{r}
+mean(onesample[which(onesample$interv==-1),]$predicted_meanY) # 2.56
+
+EY.a0.c0<-mean(onesample[which(onesample$interv==0),]$predicted_meanY)
+EY.a1.c0<-mean(onesample[which(onesample$interv==1),]$predicted_meanY)
+EY.a1.c0 - EY.a0.c0  # 3.52 
+```
+
