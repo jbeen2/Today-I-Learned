@@ -1,142 +1,90 @@
-mu0 <- 10 ; sig0sq <- 25 ; a <- .5 ; b <- 1 
-x <- c(10,13,15,11,9,18,20,17,23,21)
-dataList = list(x=x, mu0=mu0, sig0sq=sig0sq, a=a, b=b)
+# ======== 4.1 Gibbs Sampling ========
 
-# posterior kernel 
-post.normal_mu_sigsq = function(theta, dataList){
-  x = dataList$x ; mu0 = dataList$mu0 ; sig0sq = dataList$sig0sq ; 
-  a = dataList$a ; b = dataList$b 
-  
-  mu = theta[1] ; sigsq = theta[2] 
-  
-  f = exp(- 0.5 * length(x) * log(sigsq) - 0.5 * sum((x-mu)^2) / sigsq 
-          - 0.5 * (mu-mu0)^2 / sigsq
-          - (a+1) * log(sigsq) - b/sigsq)
-  
-  return (f)
+# 1. Linear Regression
+# multivariate normal dist 
+rmvnorm <- function(n, mu, Sig){  # n : #of data, mu, sig 
+  p=length(mu) # p : dimension 
+  R=chol(Sig)  # cholesky decomposition 
+  z=matrix(rnorm(n*p),n,p)
+  tt=z%*%R + matrix(mu, n, p, byrow=T)
+  return(tt)
 }
 
-Metropolis_normal_mu_sigsq = function(nsim, nburn, delta, dataList, initsList){ 
-  mu = initsList$mu ; log.sigsq = log(initsList$sigsq) 
-  theta.curr = c(mu, log.sigsq)
-  p = length(theta.curr)
-  
-  para.samples = matrix(0, nsim, p) 
-  for (iter in 1:(nsim+nburn)){ 
-    z = rnorm(p, 0, 1) 
-    theta.prop = z * delta + theta.curr 
-    mu.curr = theta.curr[1] 
-    sigsq.curr = exp(theta.curr[2]) 
-    mu.prop = theta.prop[1] 
-    sigsq.prop = exp(theta.prop[2]) 
-    alpha = post.normal_mu_sigsq(c(mu.prop, sigsq.prop), dataList) / post.normal_mu_sigsq(c(mu.curr, sigsq.curr), dataList) * sigsq.prop / sigsq.curr
-    
-    if (runif(1) < alpha) {theta.next <- theta.prop} else {theta.next <- theta.curr}
-    theta.curr = theta.next 
-    
-    if (iter > nburn) para.samples[iter-nburn, ] = c(theta.next[1] , exp(theta.next[2]))
-    }
-  return(para.samples)
+dat=read.csv("immigrants.csv")
+y=dat$wage ; n=length(y)
+X=cbind(rep(1,n),dat$sp, dat$lit) ; p=ncol(X)  # X design matrix 
+
+a = 1 ; b = 1
+XtX=t(X) %*% X
+XtX.inv=solve(XtX) ; Xty=t(X)%*%y
+beta_lse = as.vector(XtX.inv %*% t(X) %*% y)  # beta hat 
+sigsq.hat=sum((y - X %*% beta_lse)^2)/(n - p) # sigsq hat : 1.0866 
+
+# initial value setting 
+beta0=beta_lse
+Sig0=diag(diag(XtX.inv))*sigsq.hat*100  
+# > diag(diag(XtX.inv)) = diag matrix
+# > sigsq * XtX : correlation 있는 matrix, diag element 만 가져다가 쓸 것 
+# > * 100 = prior 정보 넉넉히 사용할 것 
+Sig0.inv=solve(Sig0)
+
+N = 10000 ; nburn=1000  # #of iterations 
+sigsq.samples = rep(0,N) ; beta.samples = matrix(0, N, p) # 값을 저장할 empty matrix 생성 
+# start point 
+beta.init=beta_lse
+sigsq.init=sigsq.hat
+beta=beta.init ; sigsq=sigsq.init
+
+# start gibbs sampling
+for (iter in 1:(N+nburn)) {
+  Sig.beta = solve(Sig0.inv + XtX/sigsq)
+  mu.beta = Sig.beta %*%(Sig0.inv%*%beta0 + 1/sigsq*Xty)
+  beta = as.vector(rmvnorm(1, mu.beta, Sig.beta))
+  SSR = sum((y - X %*% beta)^2)/(n - p)
+  sigsq = 1/rgamma(1, n/2 + a, 1/2 *SSR + b)
+  if (iter > nburn) {
+    beta.samples[iter-nburn,] = beta
+    sigsq.samples[iter-nburn] = sigsq
+}
 }
 
-nChains = 3 
-nsim = 20000 ; nburn=5000 ; p=2 
-mcmc.samples = array(0, dim=c(nsim, p, nChains))
-
-delta = 1 
-
-inits.random = function(x){
-  resampledX = sample(x, replace=T) 
-  muInit = mean(resampledX) ; sigsqInit = var(resampledX)
-  return(list(mu = muInit, sigsq = sigsqInit))
-}
-
-for (ich in 1:nChains) { 
-  initsList = inits.random(x)
-  mcmc.samples[,,ich] = Metropolis_normal_mu_sigsq(nsim, nburn, delta, dataList, initsList)
-}
-
-
-### posterior inference 
-mcmc.samples.combined = rbind(mcmc.samples[,,1], mcmc.samples[,,2], mcmc.samples[,,3])
-para.hat = apply(mcmc.samples.combined, 2, mean)
-HPD = apply(mcmc.samples.combined, 2, function(x) quantile(x, c(0.025, 0.975)))
-
-para.hat
-
-
-##### (2) Multivariate MCMC 
-post.normal_mu_sigsq2 = function(theta, dataList){
-  x = dataList$x ; mu0 = dataList$mu0 ; sig0sq = dataList$sig0sq ; 
-  a = dataList$a ; b = dataList$b 
-  
-  mu = theta[1] ; sigsq1 = theta[2] ; sigsq2 = theta[3]
-  sigsq = sqrt(sigsq1 * sigsq2)
-  
-  f = exp(- 0.5 * length(x) * log(sigsq) - 0.5 * sum((x-mu)^2) / sigsq 
-          - 0.5 * (mu-mu0)^2 / sigsq
-          - (a+1) * log(sigsq) - b/sigsq)
-  
-  return (f)
-}
-
-
-library(truncnorm)
-Metropolis_normal_mu_sigsq2 = function(nsim, nburn, delta, dataList, initsList){ 
-  mu = initsList$mu ; log.sigsq1 = log(initsList$sigsq) ; log.sigsq2 = log(initsList$sigsq) 
-  theta.curr = c(mu, log.sigsq1, log.sigsq2)
-  p = length(theta.curr)
-  para.samples = matrix(0, nsim, p) 
-
-  for (iter in 1:(nsim+nburn)){ 
-    z = rtruncnorm(p, 0, 1) 
-    theta.prop = z * delta + theta.curr 
-    mu.curr = theta.curr[1] 
-    sigsq1.curr = exp(theta.curr[2]) 
-    sigsq2.curr = exp(theta.curr[3]) 
-    
-    mu.prop = theta.prop[1] 
-    sigsq1.prop = exp(theta.prop[2]) 
-    sigsq2.prop = exp(theta.prop[3]) 
-    
-    alpha = post.normal_mu_sigsq2(c(mu.prop, sigsq1.prop, sigsq2.prop), dataList) / post.normal_mu_sigsq2(c(mu.curr, sigsq1.curr, sigsq2.curr), dataList) 
-    
-    if (runif(1) < alpha) {theta.next <- theta.prop} else {theta.next <- theta.curr}
-    theta.curr = theta.next 
-    
-    if (iter > nburn) para.samples[iter-nburn, ] = c(theta.next[1] , exp(theta.next[2]), exp(theta.next[3]))
-  }
-  return(para.samples)
-}
-
-nChains = 3 
-nsim = 20000 ; nburn=5000 ; p=3
-mcmc.samples = array(0, dim=c(nsim, p, nChains))
-
-delta = 1 
-
-inits.random = function(x){
-  resampledX = sample(x, replace=T) 
-  muInit = mean(resampledX) ; sigsqInit = var(resampledX)
-  return(list(mu = muInit, sigsq = sigsqInit))
-}
-
-for (ich in 1:nChains) { 
-  initsList = list(mu = para.hat[1], sigsq = para.hat[2])
-  mcmc.samples[,,ich] = Metropolis_normal_mu_sigsq2(nsim, nburn, delta, dataList, initsList)
-}
-
-
-# (4) Acceptance Rate 
-require(coda)
-Metro.draws = mcmc(mcmc.samples[,,1])
-accept.rate = 1 - rejectionRate(Metro.draws)
-accept.rate
-
-
-mu.samples = mcmc.samples[,1,] ; sigsq.samples = mcmc.samples[,2,]
+# 95% HPD interval : Trace Plot 
+ci_beta = round(apply(beta.samples, 2, quantile, probs = c(0.025, 0.975)),4)
+ci_sigsq = round(quantile(sigsq.samples, c(0.025, 0.975)),4)
 par(mfrow=c(2,2))
-plot(mu.samples[,1], type="l", xlab="iteration", ylab=quote(mu),
-     main = paste0("accept.rate = ", round(accept.rate[1],3)))
-lines(density(mu.samples[,2]), col=2)
-lines(density(mu.samples[,3]), col=3)
+for (i in 1:3) plot(beta.samples[,i], type="l",xlab=paste0("beta_",i), ylab="", col="blue")
+plot(sigsq.samples,xlab="sigsq",ylab="", type="l", col="blue")
+# > Thinning 을 하지 않아서 뭉치는 경향이 있지만, good! 
+
+# 모수의 사후분포 & 95% 사후구간 
+par(mfrow=c(2,2))
+for (i in 1:3) {
+  plot(density(beta.samples[,i]),
+       type="l",main="",xlab=paste0("beta_",i))
+  abline(v=ci_beta[,i], col=2, lty=2) }
+plot(density(sigsq.samples),main="",xlab="sigsq", type="l")
+abline(v=ci_sigsq, col=2, lty=2)
+
+
+# 2. Truncated Multivate Normal Distribution 
+library(truncnorm) # univariate normal 
+k = 5 ; mu = c(0,1,2,3,5) ; Sig = matrix(0.7, 5, 5) + diag(k) * 0.3 ; invSig = solve(Sig)
+m = 1000 ; N = 10000  # m : burnin, M : iteration 
+theta.init = c(0,1,2,3,4)  # 제한조건을 만족하는 초기치 선택 
+theta.samples = matrix(0, N, k)
+theta=c(1:k)
+
+for (iter in 1:(m+N)) {
+  for (i in 1:k) {
+    vec.Ai = invSig[i,-i]
+    vec.mi = (theta-mu)[-i]
+    cond.mean = mu[i] - 1/invSig[i,i] * vec.Ai %*% vec.mi
+    cond.sd = 1/sqrt(invSig[i,i])
+    a = ifelse(i==1, Inf, theta[i-1]) # -inf < theta1 < theta2 
+    b = ifelse(i==k, Inf, theta[i+1]) # upper bound inf 
+    theta[i] = rtruncnorm(1, a,b, cond.mean, cond.sd)
+  }
+  if (iter > m) theta.samples[iter-m,] = theta
+}
+
+# 모수의 산점도 
